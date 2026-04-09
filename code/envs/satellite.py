@@ -35,7 +35,7 @@ class Satellite(VecTask):
         self.reward_fn = reward_fn
 
         ###################################################
-        self.writer = SummaryWriter(comment="_satellite_goal_and_actions")
+        self.writer = SummaryWriter(comment="_satellite")
         self.global_step = 0
         ###################################################
 
