@@ -36,30 +36,23 @@ CONFIG = {
     # --- env section -------------------------------------------------------
     "env": {
         "numEnvs": NUM_ENVS,
-
         "numObservations": 15, # satellite_quats (4) + quat_diff (4) + quat_diff_rad (1) + satellite_angacc (3) + actions (3)
-
         "numStates": 18, # satellite_quats (4) + quat_diff (4) + quat_diff_rad (1) + satellite_angacc (3) + actions (3) + satellite_angvels (3)
-
         "numActions": 3,
-
-        "envSpacing": 3.0,
-
-        "episode_length_s": EPISODE_LENGTH_S, # seconds
-
         "clipActions": 1.0,
         "clipObservations": 10.0,
 
-        "torque_scale": 100.0,
+        "env_spacing": 3.0,
 
+        "episode_length_s": EPISODE_LENGTH_S, # seconds
+        "torque_scale": 100.0,
         "debug_arrows": DEBUG_ARROWS,
-        
         "debug_prints": DEBUG_PRINTS,
         
         "asset": {
-            "assetRoot": str(Path(__file__).resolve().parent.parent),
-            "assetFileName": "satellite.urdf",
-            "assetName": "satellite",
+            "asset_root": str(Path(__file__).resolve().parent.parent),
+            "asset_file_name": "satellite.urdf",
+            "asset_name": "satellite",
         },
     },
 

@@ -20,13 +20,13 @@ class Satellite(VecTask):
         self.cfg = cfg
 
         self.dt = cfg["sim"].get('dt', 1 / 60.0)  # seconds
-        self.max_episode_length = cfg["env"].get('episode_length_s') / self.dt  # seconds
+        self.max_episode_length = int(cfg["env"].get('episode_length_s') / self.dt)  # seconds
 
-        self.env_spacing = cfg["env"].get('envSpacing')
+        self.env_spacing = cfg["env"].get('env_spacing')
         
-        self.asset_name = cfg["env"]["asset"].get('assetName')
-        self.asset_root = cfg["env"]["asset"].get('assetRoot')
-        self.asset_file = cfg["env"]["asset"].get('assetFileName')
+        self.asset_name = cfg["env"]["asset"].get('asset_name')
+        self.asset_root = cfg["env"]["asset"].get('asset_root')
+        self.asset_file = cfg["env"]["asset"].get('asset_file_name')
 
         self.torque_scale = cfg["env"].get('torque_scale')
         self.debug_arrows = cfg["env"].get('debug_arrows')
@@ -225,7 +225,7 @@ class Satellite(VecTask):
     def check_termination(self) -> None:
         timeout = torch.ge(self.progress_buf, self.max_episode_length)
 
-        goal = torch.lt(quat_diff_rad(self.satellite_quats, self.goal_quat), 0.005).sum(dim=0)
+        goal = torch.lt(quat_diff_rad(self.satellite_quats, self.goal_quat), 0.005).sum(dim=-1)
         self.writer.add_scalar('Goal/goal', goal.item(), global_step=self.global_step)
 
         self.timeout_buf = timeout
@@ -239,7 +239,7 @@ class Satellite(VecTask):
         self.apply_torque()
 
     def post_physics_step(self):
-        self.progress_buf += 1
+        self.progress_buf = torch.add(self.progress_buf, 1)
         self.global_step += 1
    
         self.compute_observations()
