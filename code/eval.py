@@ -77,7 +77,7 @@ def main():
             action_space=env.action_space,
             device=env.device)
     
-    agent.load("/home/andreaberti/ISAAC_SKRL_Integration/runs/satellite/26-04-09_13-11-50-004521_PPO/checkpoints/best_agent.pt")
+    agent.load("/home/andreaberti/Satellite-Control-Baseline/runs/satellite/26-04-09_13-11-50-004521_PPO/checkpoints/best_agent.pt")
     trainer = SequentialTrainer(cfg=CONFIG["rl"]["trainer"], env=env, agents=agent)
 
     trainer.eval()
