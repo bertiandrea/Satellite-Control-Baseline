@@ -18,7 +18,6 @@ from gym import spaces
 from torch.profiler import record_function
 
 EXISTING_SIM = None
-SCREEN_CAPTURE_RESOLUTION = (1027, 768)
 
 def _create_sim_once(gym, *args, **kwargs):
     global EXISTING_SIM
@@ -81,25 +80,15 @@ class Env(ABC):
 
 class VecTask(Env):
 
-    metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": 24}
-
-    def __init__(self, config, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture: bool = False, force_render: bool = False): 
+    def __init__(self, config, rl_device, sim_device, graphics_device_id, headless): 
         super().__init__(config, rl_device, sim_device, graphics_device_id, headless)
-        self.virtual_screen_capture = virtual_screen_capture
-        self.virtual_display = None
-        if self.virtual_screen_capture:
-            from pyvirtualdisplay.smartdisplay import SmartDisplay
-            self.virtual_display = SmartDisplay(size=SCREEN_CAPTURE_RESOLUTION)
-            self.virtual_display.start()
-        self.force_render = force_render
-
-        self.sim_params = self.__parse_sim_params(self.cfg["physics_engine"], self.cfg["sim"])
-        if self.cfg["physics_engine"] == "physx":
+        self.sim_params = self.__parse_sim_params(config["physics_engine"], config["sim"])
+        if config["physics_engine"] == "physx":
             self.physics_engine = gymapi.SIM_PHYSX
-        elif self.cfg["physics_engine"] == "flex":
+        elif config["physics_engine"] == "flex":
             self.physics_engine = gymapi.SIM_FLEX
         else:
-            msg = f"Invalid physics engine backend: {self.cfg['physics_engine']}"
+            msg = f"Invalid physics engine backend: {config['physics_engine']}"
             raise ValueError(msg)
 
         self.dt: float = self.sim_params.dt
@@ -109,9 +98,11 @@ class VecTask(Env):
 
         self.gym = gymapi.acquire_gym()
 
+        self.sim_initialized = False
         self.create_sim()
         self.gym.prepare_sim(self.sim)
-
+        self.sim_initialized = True
+        
         self.set_viewer()
         self.allocate_buffers()
 
@@ -149,18 +140,16 @@ class VecTask(Env):
             (self.num_envs, self.num_states), device=self.device, dtype=torch.float)
         self.rew_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.float)
-        self.reset_buf = torch.ones(
-            self.num_envs, device=self.device, dtype=torch.long)
+        self.reset_buf = torch.zeros(
+            self.num_envs, device=self.device, dtype=torch.bool)
         self.timeout_buf = torch.zeros(
-             self.num_envs, device=self.device, dtype=torch.long)
+             self.num_envs, device=self.device, dtype=torch.bool)
         self.progress_buf = torch.zeros(
             self.num_envs, device=self.device, dtype=torch.long)
         self.extras = {}
 
     def create_sim(self, compute_device: int, graphics_device: int, physics_engine, sim_params: gymapi.SimParams):
-        #sim = _create_sim_once(self.gym, compute_device, graphics_device, physics_engine, sim_params)
-        # WORKAROUND: BugFix for IsaacGym not handling multiple Gym instances correctly in the same process (Needed for Hyperparameter Optimization)
-        sim = self.gym.create_sim(compute_device, graphics_device, physics_engine, sim_params)
+        sim = _create_sim_once(self.gym, compute_device, graphics_device, physics_engine, sim_params)
         if sim is None:
             print("*** Failed to create sim")
             quit()
@@ -179,9 +168,6 @@ class VecTask(Env):
                 self.pre_physics_step(actions)
 
             for i in range(self.control_freq_inv):
-                if self.force_render:
-                    with record_function("#VecTask__step__RENDER"):
-                        self.render()
                 with record_function("#VecTask__step__SIM"):
                     self.gym.simulate(self.sim)
 
@@ -218,7 +204,7 @@ class VecTask(Env):
 
         return self.obs_states_dict
 
-    def render(self, mode="rgb_array"):
+    def render(self):
         if self.viewer:
             if self.gym.query_viewer_has_closed(self.viewer):
                 sys.exit()
@@ -260,10 +246,6 @@ class VecTask(Env):
                     os.makedirs(self.record_frames_dir, exist_ok=True)
 
                 self.gym.write_viewer_image_to_file(self.viewer, join(self.record_frames_dir, f"frame_{self.control_steps}.png"))
-
-            if self.virtual_display and mode == "rgb_array":
-                img = self.virtual_display.grab()
-                return np.array(img)
 
     def __parse_sim_params(self, physics_engine: str, config_sim: Dict[str, Any]) -> gymapi.SimParams:
         sim_params = gymapi.SimParams()

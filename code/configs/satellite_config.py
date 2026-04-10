@@ -10,7 +10,7 @@ from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.resources.schedulers.torch import KLAdaptiveRL
 
 NUM_ENVS = 4096
-N_EPOCHS = 8
+N_EPISODES = 16
 EPISODE_LENGTH_S = 60.0
 HEADLESS = True
 PROFILE = False
@@ -28,8 +28,6 @@ CONFIG = {
     "sim_device": "cuda:0",
     "graphics_device_id": 0,
     "headless": HEADLESS,
-    "virtual_screen_capture": False,
-    "force_render": False,
 
     "profile": PROFILE,
 
@@ -100,12 +98,12 @@ CONFIG = {
             "experiment": {
                 "write_interval": "auto",
                 "checkpoint_interval": "auto",
-                "directory": "./runs/satellite",
+                "directory": "./runs",
                 "wandb": False,
             },
         },
         "trainer": {
-            "timesteps": int(N_EPOCHS * EPISODE_LENGTH_S / (1 / 60.0)),
+            "timesteps": int(EPISODE_LENGTH_S / (1.0 / 60.0) * N_EPISODES),
             "disable_progressbar": False,
             "headless": HEADLESS,
         },

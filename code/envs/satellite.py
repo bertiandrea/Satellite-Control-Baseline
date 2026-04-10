@@ -12,14 +12,12 @@ import numpy as np
 
 from torch.utils.tensorboard import SummaryWriter
 
-BASE_COLORS_SAT  = torch.tensor([[1,0,1], [0,1,1], [1,1,0]], dtype=torch.float32)
-BASE_COLORS_GOAL = torch.tensor([[0,0,1], [0,1,0], [1,0,0]], dtype=torch.float32)
+BASE_COLORS_SAT  = torch.tensor([[1,0,1], [0,1,1], [1,1,0]], dtype=torch.float)
+BASE_COLORS_GOAL = torch.tensor([[0,0,1], [0,1,0], [1,0,0]], dtype=torch.float)
 
 class Satellite(VecTask):
-    def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, virtual_screen_capture, force_render, reward_fn):
-        self.cfg = cfg
-
-        self.dt = cfg["sim"].get('dt', 1 / 60.0)  # seconds
+    def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, reward_fn):
+        self.dt = cfg["sim"].get('dt')  # seconds
         self.max_episode_length = int(cfg["env"].get('episode_length_s') / self.dt)  # seconds
 
         self.env_spacing = cfg["env"].get('env_spacing')
@@ -39,7 +37,7 @@ class Satellite(VecTask):
         self.global_step = 0
         ###################################################
 
-        super().__init__(config=cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless, virtual_screen_capture=virtual_screen_capture, force_render=force_render)
+        super().__init__(config=cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless)
 
         ################# SETUP SIM #################
         self.actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
@@ -61,7 +59,6 @@ class Satellite(VecTask):
         self.torque_tensor = torch.zeros((self.num_bodies * self.num_envs, 3), device=self.device)
         self.root_indices = torch.arange(self.num_envs, device=self.device, dtype=torch.int) * self.num_bodies
         self.force_tensor = torch.zeros_like(self.torque_tensor, device=self.device)
-
         
     def create_sim(self) -> None:
         self.sim = super().create_sim(self.device_id, self.graphics_device_id, self.physics_engine, self.sim_params) # Acquires the sim pointer
@@ -74,7 +71,7 @@ class Satellite(VecTask):
 
         self.envs = []
         self.actor_handles = []
-        self.sat_glob_pos = torch.zeros((self.num_envs, 3), dtype=torch.float32, device=self.device)
+        self.sat_glob_pos = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
 
         self.goal_quat = sample_random_quaternion_batch(self.device, self.num_envs)
 
@@ -82,7 +79,7 @@ class Satellite(VecTask):
             env = self.gym.create_env(self.sim, env_lower, env_upper, num_per_row)
             origin = self.gym.get_env_origin(env)
             self.sat_glob_pos[i] = torch.tensor([origin.x, origin.y, origin.z],
-                                                dtype=torch.float32,
+                                                dtype=torch.float,
                                                 device=self.device)
             
             asset_init_pos_p = [0, 0, 0]
@@ -210,12 +207,6 @@ class Satellite(VecTask):
         assert not torch.isinf(self.states_buf).any(), f"self.states_buf has Inf: {self.actions, self.states_buf}"
         ########################################
 
-        self.writer.add_scalar('Angular error/q0', quat_diff(self.satellite_quats, self.goal_quat)[0,0].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular error/q1', quat_diff(self.satellite_quats, self.goal_quat)[0,1].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular error/q2', quat_diff(self.satellite_quats, self.goal_quat)[0,2].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular error/q3', quat_diff(self.satellite_quats, self.goal_quat)[0,3].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular error/rad', quat_diff_rad(self.satellite_quats, self.goal_quat)[0].item(), global_step=self.global_step)
-
     def compute_reward(self) -> None:
         self.rew_buf = self.reward_fn.compute(
             self.satellite_quats, self.satellite_angvels, self.satellite_angacc,
@@ -224,9 +215,6 @@ class Satellite(VecTask):
 
     def check_termination(self) -> None:
         timeout = torch.ge(self.progress_buf, self.max_episode_length)
-
-        goal = torch.lt(quat_diff_rad(self.satellite_quats, self.goal_quat), 0.005).sum(dim=-1)
-        self.writer.add_scalar('Goal/goal', goal.item(), global_step=self.global_step)
 
         self.timeout_buf = timeout
         self.reset_buf = timeout
@@ -240,7 +228,6 @@ class Satellite(VecTask):
 
     def post_physics_step(self):
         self.progress_buf = torch.add(self.progress_buf, 1)
-        self.global_step += 1
    
         self.compute_observations()
 
@@ -250,3 +237,23 @@ class Satellite(VecTask):
 
         if self.debug_arrows:
             self.draw_arrows()
+        
+        q_diff = quat_diff(self.satellite_quats, self.goal_quat)
+        q_diff_rad = quat_diff_rad(self.satellite_quats, self.goal_quat)
+        goal = torch.lt(q_diff_rad * 180.0 / torch.pi, 0.1732).sum(dim=0)
+
+        self.writer.add_scalar('Actions/action_X', self.actions[0, 0].item(), global_step=self.global_step)
+        self.writer.add_scalar('Actions/action_Y', self.actions[0, 1].item(), global_step=self.global_step)
+        self.writer.add_scalar('Actions/action_Z', self.actions[0, 2].item(), global_step=self.global_step)
+        self.writer.add_scalar('Angular Error/q0', q_diff[0,0].item(), global_step=self.global_step)
+        self.writer.add_scalar('Angular Error/q1', q_diff[0,1].item(), global_step=self.global_step)
+        self.writer.add_scalar('Angular Error/q2', q_diff[0,2].item(), global_step=self.global_step)
+        self.writer.add_scalar('Angular Error/q3', q_diff[0,3].item(), global_step=self.global_step)
+        self.writer.add_scalar('Angular Error/rad', q_diff_rad[0].item(), global_step=self.global_step)
+        self.writer.add_scalar('Angular Error/mean_rad', q_diff_rad.mean().item(), global_step=self.global_step)
+        self.writer.add_scalar('Angular Error/deg', q_diff_rad[0].item() * 180.0 / torch.pi, global_step=self.global_step)
+        self.writer.add_scalar('Angular Error/mean_deg', q_diff_rad.mean().item() * 180.0 / torch.pi, global_step=self.global_step)
+        self.writer.add_scalar('Goal/goal', goal.item(), global_step=self.global_step)
+
+        self.global_step += 1
+

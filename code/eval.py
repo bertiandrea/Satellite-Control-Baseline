@@ -4,9 +4,7 @@ from code.configs.satellite_config import CONFIG
 from code.envs.satellite import Satellite
 from code.models.custom_model import Shared
 from code.envs.wrappers.isaacgym_envs_wrapper import IsaacGymWrapper
-from code.rewards.satellite_reward import (
-    ExponentialStabilizationReward,
-)
+from code.rewards.satellite_reward import ExponentialStabilizationReward
 
 import isaacgym
 import torch
@@ -28,7 +26,6 @@ def parse_args():
     parser.add_argument(
         "--reward-fn",
         choices=list(REWARD_MAP.keys()),
-        default="test",
         help="Which RewardFunction?"
     )
     return parser.parse_args()
@@ -47,8 +44,6 @@ def main():
         sim_device=CONFIG["sim_device"],
         graphics_device_id=CONFIG["graphics_device_id"],
         headless=CONFIG["headless"],
-        virtual_screen_capture=CONFIG["virtual_screen_capture"],
-        force_render= CONFIG["force_render"],
         reward_fn=REWARD_MAP[args.reward_fn]()
     )
     
