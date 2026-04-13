@@ -9,44 +9,47 @@ import torch
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 from skrl.resources.schedulers.torch import KLAdaptiveRL
 
-NUM_ENVS = 4096
-N_EPISODES = 8
-EPISODE_LENGTH_S = 120.0
 HEADLESS = True
 PROFILE = False
 DEBUG_ARROWS = False
 DEBUG_PRINTS = False
 
+EPISODE_LENGTH = 120.0
+N_EPISODES = 8
+
+DR_RANDOMIZATION = False
+CAPS = False
+
 CONFIG = {
     # --- seed & devices ----------------------------------------------------
     "set_seed": True,
     "seed": 42,
-
+    
+    "profile": PROFILE,
+    
     "physics_engine": "physx",
 
     "rl_device": "cuda:0",
     "sim_device": "cuda:0",
     "graphics_device_id": 0,
     "headless": HEADLESS,
-
-    "profile": PROFILE,
-
+    
     # --- env section -------------------------------------------------------
     "env": {
-        "numEnvs": NUM_ENVS,
+        "numEnvs": 4096,
         "numObservations": 15, # satellite_quats (4) + quat_diff (4) + quat_diff_rad (1) + satellite_angacc (3) + actions (3)
         "numStates": 18, # satellite_quats (4) + quat_diff (4) + quat_diff_rad (1) + satellite_angacc (3) + actions (3) + satellite_angvels (3)
         "numActions": 3,
         "clipActions": 1.0,
         "clipObservations": 10.0,
 
+        "max_episode_length": EPISODE_LENGTH,
+        
         "env_spacing": 3.0,
-
-        "episode_length_s": EPISODE_LENGTH_S, # seconds
         "torque_scale": 100.0,
         "debug_arrows": DEBUG_ARROWS,
         "debug_prints": DEBUG_PRINTS,
-        
+		
         "asset": {
             "asset_root": str(Path(__file__).resolve().parent.parent),
             "asset_file_name": "satellite.urdf",
@@ -70,7 +73,7 @@ CONFIG = {
     # --- RL / PPO hyper-params --------------------------------------------
     "rl": {
         "PPO": {
-            "num_envs": NUM_ENVS,
+            "num_envs": 4096,
             "rollouts": 16,
             "learning_epochs": 8,
             "mini_batches": 4,
@@ -91,24 +94,62 @@ CONFIG = {
             "value_loss_scale" : 1.0, #Coefficient weighting the value function loss in the total loss.
             "kl_threshold" : 0, #Optional early-stop threshold on KL divergence between old and new policies (0 disables).
             "lambda" : 0.95, #(λ) GAE parameter for bias–variance trade-off in advantage estimation.
-
+            
             "random_timesteps" : 0, #Number of initial timesteps with random actions before learning or policy-driven sampling.
             "learning_starts" : 0, #Number of environment steps to collect before beginning any gradient updates.
             
             "experiment": {
                 "write_interval": "auto",
                 "checkpoint_interval": "auto",
-                "directory": "./runs",
+                "directory": "./train/runs",
                 "wandb": False,
             },
         },
+
         "trainer": {
-            "timesteps": int(EPISODE_LENGTH_S / (1.0 / 60.0) * N_EPISODES),
-            "disable_progressbar": False,
+            "timesteps": int(EPISODE_LENGTH / (1.0 / 60.0) * N_EPISODES),
+            "disable_progressbar": DEBUG_PRINTS,
             "headless": HEADLESS,
         },
+
         "memory": {
             "rollouts": 16,
+        },
+    },
+
+    # --- reward -----------------------------------------------------------
+    "reward": {
+        "reward_function": "ExponentialReward",
+        "ExponentialReward":{
+            "lambda_u": 0.00005,
+            "goal_deg": 0.005,
+            "bonus": 9.0,
+        },
+    },
+
+    # --- log_status -----------------------------------------------------------
+    "log_status": {
+        "log": True,
+        "log_interval": 1,  # steps
+        "log_dir": "./train/status",
+    },
+
+    # --- dr_randomization -------------------------------------------------
+    "dr_randomization": {
+        "enabled": DR_RANDOMIZATION,
+        "dr_params": {
+            "actor_params": {
+                "satellite": {
+                    "color": True,
+                    "rigid_body_properties": {
+                        "inertia": {
+                            "distribution": "gaussian", # "uniform" or "gaussian"
+                            "operation": "scaling", # "scaling" or "addition"
+                            "range": [1.0, 0.05], # gaussian: [mu, var], uniform: [low, high]
+                        },
+                    },
+                },
+            },
         },
     },
 }

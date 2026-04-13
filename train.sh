@@ -2,14 +2,12 @@
 
 DISPLAY_NUM=${1:-99}            # Numero del display, default 99
 CONDA_ENV=${2:-rlgpu}           # Nome dell'ambiente Conda, default "rlgpu"
-REWARD_FN=${3:-test}            # Reward function da passare, default "test"
 SCREEN_RES="1920x1080x24"
 
 export DISPLAY=:$DISPLAY_NUM
 
 echo "Using DISPLAY=$DISPLAY"
 echo "Using Conda environment: $CONDA_ENV"
-echo "Using reward function: $REWARD_FN"
 
 # Verifica se il display è già in uso
 if [ -e /tmp/.X${DISPLAY_NUM}-lock ]; then
@@ -64,6 +62,6 @@ else
 fi
 
 # Avvia il training con la reward function scelta
-python -m code.train --reward-fn "$REWARD_FN"
+python -m code.train
 
 exit 0

@@ -1,7 +1,8 @@
 # satellite.py
 
-from code.utils.satellite_util import sample_random_quaternion_batch, quat_diff, quat_diff_rad, quat_axis
-from code.envs.vec_task import VecTask
+from code.utils.satellite_util import quat_from_euler_xyz, sample_random_quaternion_batch, quat_diff, quat_diff_rad, quat_axis, quat_mul, quat_conjugate
+from code.envs.vec_task import DRVecTask
+from code.rewards.satellite_reward import REWARD_MAP
 
 import isaacgym #BugFix
 import torch
@@ -9,35 +10,62 @@ from isaacgym import gymutil, gymtorch, gymapi
 
 from pathlib import Path
 import numpy as np
+import pandas as pd
+import math
+import os
 
 from torch.utils.tensorboard import SummaryWriter
 
 BASE_COLORS_SAT  = torch.tensor([[1,0,1], [0,1,1], [1,1,0]], dtype=torch.float)
 BASE_COLORS_GOAL = torch.tensor([[0,0,1], [0,1,0], [1,0,0]], dtype=torch.float)
 
-class Satellite(VecTask):
-    def __init__(self, cfg, rl_device, sim_device, graphics_device_id, headless, reward_fn):
-        self.dt = cfg["sim"].get('dt')  # seconds
-        self.max_episode_length = int(cfg["env"].get('episode_length_s') / self.dt)  # seconds
+class Satellite(DRVecTask):
+    def __init__(self, config, rl_device, sim_device, graphics_device_id, headless, is_eval):
 
-        self.env_spacing = cfg["env"].get('env_spacing')
-        
-        self.asset_name = cfg["env"]["asset"].get('asset_name')
-        self.asset_root = cfg["env"]["asset"].get('asset_root')
-        self.asset_file = cfg["env"]["asset"].get('asset_file_name')
+        self.is_eval = is_eval
 
-        self.torque_scale = cfg["env"].get('torque_scale')
-        self.debug_arrows = cfg["env"].get('debug_arrows')
-        self.debug_prints = cfg["env"].get('debug_prints')
+        self.dt =                    config["sim"].get('dt')
+        self.max_episode_length =    int(config["env"].get('max_episode_length') / self.dt)
 
-        self.reward_fn = reward_fn
+        self.env_spacing =           config["env"].get('env_spacing')
+
+        self.asset_name =            config["env"]["asset"].get('asset_name')
+        self.asset_root =            config["env"]["asset"].get('asset_root')
+        self.asset_file =            config["env"]["asset"].get('asset_file_name')
+
+        self.torque_scale =          config["env"].get('torque_scale')
+        self.debug_arrows =          config["env"].get('debug_arrows')
+        self.debug_prints =          config["env"].get('debug_prints')
+
+        self.reward_fn = REWARD_MAP[config["reward"].get("reward_function")](
+            **config["reward"].get(config["reward"].get("reward_function"))
+        )
 
         ###################################################
-        self.writer = SummaryWriter(comment="_satellite")
-        self.global_step = 0
+        self.log_status =               config["log_status"].get("log")
+        if self.log_status:
+            self.log_status_interval =  config["log_status"].get("log_interval")
+            self.writer =               SummaryWriter(log_dir = config["log_status"].get("log_dir"))
         ###################################################
 
-        super().__init__(config=cfg, rl_device=rl_device, sim_device=sim_device, graphics_device_id=graphics_device_id, headless=headless)
+        ###################################################    
+        if self.is_eval:
+            self.log_trajectories =                     config["log_trajectories"].get("log")
+            if self.log_trajectories:
+                self.log_trajectories_dir =             config["log_trajectories"].get("log_dir")
+                self.log_trajectories_interval =        config["log_trajectories"].get("log_interval")
+                self.log_trajectories_flush_interval =  config["log_trajectories"].get("log_flush")
+            
+            self.explosion =            config["explosion"].get('enabled')
+            if self.explosion:
+                self.explosion_time =   int(config["explosion"].get('explosion_time') / self.dt)
+                self.explosion_mean =   config["explosion"].get('explosion_mean')
+                self.explosion_std =    config["explosion"].get('explosion_std')
+            
+            self.discretize_starting_pos =  config["env"].get('discretize_starting_pos')
+        ###################################################    
+
+        super().__init__(config, rl_device, sim_device, graphics_device_id, headless)
 
         ################# SETUP SIM #################
         self.actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
@@ -50,19 +78,36 @@ class Satellite(VecTask):
 
         ################# SIM #################
         self.gym.refresh_actor_root_state_tensor(self.sim)
-        self.initial_root_states = self.root_states.clone()
+        self.initial_root_states = self.root_states.detach().clone()
         print(f"Initial root states: {self.initial_root_states[0]}")
         ########################################
 
         self.prev_angvel = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
 
         self.torque_tensor = torch.zeros((self.num_bodies * self.num_envs, 3), device=self.device)
+        self.force_tensor = torch.zeros((self.num_bodies * self.num_envs, 3), device=self.device)
         self.root_indices = torch.arange(self.num_envs, device=self.device, dtype=torch.int) * self.num_bodies
-        self.force_tensor = torch.zeros_like(self.torque_tensor, device=self.device)
-        
+
+        ###################################################
+        if self.is_eval and self.explosion:
+            self.impulse = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
+        ###################################################
+
+        ###################################################    
+        if self.is_eval and self.log_trajectories:
+                os.makedirs(os.path.dirname(self.log_trajectories_dir), exist_ok=True)
+                self.log_buffer = []
+        ###################################################
+
     def create_sim(self) -> None:
         self.sim = super().create_sim(self.device_id, self.graphics_device_id, self.physics_engine, self.sim_params) # Acquires the sim pointer
         self.create_envs(self.env_spacing, int(np.sqrt(self.num_envs)))
+        ###################################################
+        if self.randomize:
+            print("Applying randomizations...")
+            ids = torch.arange(self.num_envs, device=self.device, dtype=torch.int)
+            self.apply_randomizations(ids, self.dr_params)
+        ###################################################
 
     def create_envs(self, spacing, num_per_row: int) -> None:
         self.asset = self.load_asset()
@@ -73,19 +118,37 @@ class Satellite(VecTask):
         self.actor_handles = []
         self.sat_glob_pos = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
 
-        self.goal_quat = sample_random_quaternion_batch(self.device, self.num_envs)
+        ###################################################
+        if self.is_eval and self.discretize_starting_pos:
+            print("[EVAL] Discretized starting position enabled. Sampling base quaternion.")
+            base_quat = sample_random_quaternion_batch(self.device, 1)
+            self.goal_quat = base_quat.repeat(self.num_envs, 1)
+        else:
+            self.goal_quat = sample_random_quaternion_batch(self.device, self.num_envs)
 
+        if self.is_eval and self.discretize_starting_pos:
+            print("[EVAL] Discretized starting position enabled. Precomputing orientations.")
+            self.asset_init_pos_r_all = self.get_discretized_orientations(base_quat)
+        ###################################################
+            
         for i in range(self.num_envs):
             env = self.gym.create_env(self.sim, env_lower, env_upper, num_per_row)
             origin = self.gym.get_env_origin(env)
             self.sat_glob_pos[i] = torch.tensor([origin.x, origin.y, origin.z],
                                                 dtype=torch.float,
                                                 device=self.device)
-            
+            ###################################################
             asset_init_pos_p = [0, 0, 0]
-            asset_init_pos_r = sample_random_quaternion_batch(self.device, 1)[0].cpu().numpy()
 
+            if self.is_eval and self.discretize_starting_pos:
+                print("[EVAL] Discretized starting position enabled. Using precomputed orientations.")
+                #self.asset_init_pos_r_all = self.get_discretized_orientations(base_quat)
+                asset_init_pos_r = self.asset_init_pos_r_all[i]
+            else:
+                asset_init_pos_r = sample_random_quaternion_batch(self.device, 1)[0].cpu().numpy()
+            ###################################################
             actor_handle = self.create_actor(i, env, self.asset, asset_init_pos_p, asset_init_pos_r, 1, self.asset_name)
+            ###################################################
             self.actor_handles.append(actor_handle)
             self.envs.append(env)
 
@@ -100,7 +163,9 @@ class Satellite(VecTask):
         init_pose.r = gymapi.Quat(*pose_r)
         actor_handle = self.gym.create_actor(env, asset_handle, init_pose, f"{name}", env_idx, collision)
         return actor_handle
-                
+
+    ################################################################################################################################
+
     def draw_arrows(self):
         x_goal = quat_axis(self.goal_quat, 0)
         y_goal = quat_axis(self.goal_quat, 1)
@@ -135,7 +200,99 @@ class Satellite(VecTask):
         )
 
     ################################################################################################################################
-           
+    def get_discretized_orientations(self, base_quat: torch.Tensor) -> torch.Tensor:
+        if self.num_envs == 1:
+            return quat_conjugate(base_quat)
+
+        pts = int(round(self.num_envs ** (1/3)))
+        if pts ** 3 != self.num_envs:
+            raise ValueError("num_envs must be a perfect cube for discretized orientations.")
+
+        angles = torch.linspace(0, 2 * torch.pi, pts, device=self.device)
+        angles_i, angles_j, angles_k = torch.meshgrid(angles, angles, angles, indexing='ij')
+        orientations = quat_from_euler_xyz(angles_i.flatten(), angles_j.flatten(), angles_k.flatten())
+        orientations = quat_mul(base_quat.repeat(self.num_envs, 1), orientations)
+        orientations = orientations / torch.norm(orientations, dim=1, keepdim=True)
+        return orientations
+   
+    ################################################################################################################################
+
+    def explosion_impulse(self) -> torch.Tensor:
+        mag = torch.normal(self.explosion_mean, self.explosion_std, size=(self.num_envs, 1), device=self.device)
+        dirs = torch.randn(self.num_envs, 3, device=self.device)
+        dirs = dirs / dirs.norm(dim=1, keepdim=True).clamp(min=1e-8)
+        impulse = dirs * mag
+
+        impulse_x, impulse_y, impulse_z = impulse[0].tolist()
+        print(("!" * 80 + "\n") * 15)
+        print(f"!!!!!!!!!!!!!!!!!!!!!!! EXPLOSION {impulse_x:.2f} {impulse_y:.2f} {impulse_z:.2f} !!!!!!!!!!!!!!!!!!!!!!!\n")
+        print(("!" * 80 + "\n") * 15)
+
+        return impulse
+
+    ################################################################################################################################
+    
+    def _log_scalar(self, tag: str, value: float):
+        if self.control_steps % self.log_status_interval == 0:
+            self.writer.add_scalar(tag, value, global_step=self.control_steps)
+            self.writer.flush()
+
+    def log_status_func(self) -> None:
+        #################################################################
+        q_diff = quat_diff(self.satellite_quats, self.goal_quat)
+        q_diff_rad = quat_diff_rad(self.satellite_quats, self.goal_quat)
+        goal = torch.lt(q_diff_rad * 180.0 / torch.pi, 0.1732).sum(dim=0)
+        delta_actions = self.actions - self.prev_actions if hasattr(self, 'prev_actions') else self.actions
+        self.prev_actions = self.actions.detach().clone()
+        #################################################################
+
+        self._log_scalar("Actions/action_X", self.actions[0, 0].item())
+        self._log_scalar("Actions/action_Y", self.actions[0, 1].item())
+        self._log_scalar("Actions/action_Z", self.actions[0, 2].item())
+
+        self._log_scalar("Angular Error/q_diff_0", q_diff[0, 0].item())
+        self._log_scalar("Angular Error/q_diff_1", q_diff[0, 1].item())
+        self._log_scalar("Angular Error/q_diff_2", q_diff[0, 2].item())
+        self._log_scalar("Angular Error/q_diff_3", q_diff[0, 3].item())
+        self._log_scalar("Angular Error/q_diff_rad", q_diff_rad[0].item())
+        self._log_scalar("Angular Error/q_diff_deg", q_diff_rad[0].item() * 180.0 / torch.pi)
+
+        self._log_scalar("Angular Error/q_diff_mean_rad", q_diff_rad.mean().item())
+        self._log_scalar("Angular Error/q_diff_mean_deg", q_diff_rad.mean().item() * 180.0 / torch.pi)
+
+        self._log_scalar("Energy/mean", (self.actions ** 2).sum(dim=-1).mean().item())
+        self._log_scalar("Energy/delta_mean", (delta_actions ** 2).sum(dim=-1).mean().item())
+
+        self._log_scalar("Torque/max_mean", self.actions.abs().max(dim=1).values.mean().item())
+
+        self._log_scalar('Goal/goal', goal.item())
+
+    def log_trajectories_func(self) -> None:
+        if self.control_steps % self.log_trajectories_interval == 0:
+            self.log_buffer.append({
+                "step": int(self.control_steps),
+                "quat": self.satellite_quats.detach().cpu(),
+                "ang_diff": quat_diff_rad(self.satellite_quats, self.goal_quat).detach().cpu() * (180.0 / math.pi),
+                "angvel": self.satellite_angvels.detach().cpu(),
+                "angacc": self.satellite_angacc.detach().cpu(),
+                "actions": self.actions.detach().cpu(),
+            })
+
+        if self.control_steps % self.log_trajectories_flush_interval == 0 and self.log_buffer:
+            tmp_path = f"{self.log_trajectories_dir}.tmp"
+            if os.path.exists(self.log_trajectories_dir):
+                data = torch.load(self.log_trajectories_dir, weights_only=True)
+                data.extend(self.log_buffer)
+            else:
+                data = list(self.log_buffer)
+            torch.save(data, tmp_path)
+            os.replace(tmp_path, self.log_trajectories_dir)
+            self.log_buffer.clear()
+            if self.debug_prints:
+                print(f"[LOG] Flushed to {self.log_trajectories_dir} at step {self.control_steps}")
+        
+    ################################################################################################################################
+
     def reset_idx(self, ids: torch.Tensor) -> None:
         ################# SIM #################
         self.root_states[ids] = torch.zeros((len(ids), 13), dtype=torch.float32, device=self.device)
@@ -156,6 +313,11 @@ class Satellite(VecTask):
 
         self.rew_buf[ids] = 0.0
 
+        ###################################################
+        if self.randomize:
+            self.apply_randomizations(ids, self.dr_params)
+        ###################################################
+
     ################################################################################################################################
                 
     def termination(self) -> None:
@@ -173,15 +335,27 @@ class Satellite(VecTask):
         assert not torch.isinf(self.actions).any(), f"actions has Inf: {self.actions, self.states_buf}"
         #########################################
 
-        ################# SIM #################
-        self.torque_tensor[self.root_indices] = self.actions
+        #########################################
+        if self.is_eval and self.explosion and self.control_steps == self.explosion_time:
+            self.impulse = self.explosion_impulse(self.impulse)
+            self.torque_tensor[self.root_indices] = torch.add(self.actions, self.impulse)
+        else:
+            self.torque_tensor[self.root_indices] = self.actions
+        #########################################
+
+        ################## SIM ##################
         self.gym.apply_rigid_body_force_tensors(
             self.sim,
             gymtorch.unwrap_tensor(self.force_tensor),  
             gymtorch.unwrap_tensor(self.torque_tensor), 
             gymapi.LOCAL_SPACE,
         )
-        #######################################
+        #########################################
+
+        #########################################
+        if self.is_eval and self.explosion and self.control_steps == self.explosion_time:
+            self.impulse = 0.0
+        #########################################
                 
     def compute_observations(self) -> None:
         ################# SIM #################
@@ -191,10 +365,9 @@ class Satellite(VecTask):
             self.dt
         )
 
-        self.prev_angvel = self.satellite_angvels.clone()
+        self.prev_angvel = self.satellite_angvels.detach().clone()
         self.obs_buf = torch.cat(
-            (self.satellite_quats, quat_diff(self.satellite_quats, self.goal_quat), 
-                quat_diff_rad(self.satellite_quats, self.goal_quat).unsqueeze(-1), 
+            (self.satellite_quats, quat_diff(self.satellite_quats, self.goal_quat), quat_diff_rad(self.satellite_quats, self.goal_quat).unsqueeze(-1), 
                 self.satellite_angacc, self.actions), dim=-1)
         self.states_buf = torch.cat(
             (self.obs_buf, self.satellite_angvels), dim=-1)
@@ -218,7 +391,7 @@ class Satellite(VecTask):
 
         self.timeout_buf = timeout
         self.reset_buf = timeout
-    
+
     def pre_physics_step(self, actions):
         self.actions = actions.to(self.device)
 
@@ -228,32 +401,20 @@ class Satellite(VecTask):
 
     def post_physics_step(self):
         self.progress_buf = torch.add(self.progress_buf, 1)
-   
+        
         self.compute_observations()
 
         self.compute_reward()
 
         self.check_termination()
 
+        if self.log_status:
+            self.log_status_func()
+        
+        if self.is_eval and self.log_trajectories:
+            self.log_trajectories_func()
+
         if self.debug_arrows:
             self.draw_arrows()
-        
-        q_diff = quat_diff(self.satellite_quats, self.goal_quat)
-        q_diff_rad = quat_diff_rad(self.satellite_quats, self.goal_quat)
-        goal = torch.lt(q_diff_rad * 180.0 / torch.pi, 0.1732).sum(dim=0)
 
-        self.writer.add_scalar('Actions/action_X', self.actions[0, 0].item(), global_step=self.global_step)
-        self.writer.add_scalar('Actions/action_Y', self.actions[0, 1].item(), global_step=self.global_step)
-        self.writer.add_scalar('Actions/action_Z', self.actions[0, 2].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular Error/q0', q_diff[0,0].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular Error/q1', q_diff[0,1].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular Error/q2', q_diff[0,2].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular Error/q3', q_diff[0,3].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular Error/rad', q_diff_rad[0].item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular Error/mean_rad', q_diff_rad.mean().item(), global_step=self.global_step)
-        self.writer.add_scalar('Angular Error/deg', q_diff_rad[0].item() * 180.0 / torch.pi, global_step=self.global_step)
-        self.writer.add_scalar('Angular Error/mean_deg', q_diff_rad.mean().item() * 180.0 / torch.pi, global_step=self.global_step)
-        self.writer.add_scalar('Goal/goal', goal.item(), global_step=self.global_step)
-
-        self.global_step += 1
 

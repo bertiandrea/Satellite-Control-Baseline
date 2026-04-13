@@ -1,12 +1,11 @@
 # eval.py
 
-from code.configs.satellite_config import CONFIG
+from code.configs.satellite_config_eval import CONFIG
 from code.envs.satellite import Satellite
 from code.models.custom_model import Shared
 from code.envs.wrappers.isaacgym_envs_wrapper import IsaacGymWrapper
-from code.rewards.satellite_reward import ExponentialStabilizationReward
 
-import isaacgym
+import isaacgym #BugFix
 import torch
 
 from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
@@ -15,36 +14,83 @@ from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
 
 import argparse
+import json
+import datetime
+from pathlib import Path
 
-REWARD_MAP = {
-    "exp_stabilization": ExponentialStabilizationReward,
-}
+def deep_update(base: dict, override: dict):
+    for k, v in override.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            deep_update(base[k], v)
+        else:
+            base[k] = v
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Training con reward function selezionabile")
+    parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--reward-fn",
-        choices=list(REWARD_MAP.keys()),
-        help="Which RewardFunction?"
+        "--run-name",
+        type=str
+    )
+    parser.add_argument(
+        "--config-name",
+        type=str
     )
     return parser.parse_args()
 
 def main():
     args = parse_args()
+    
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    CONFIG["rl"]["PPO"]["experiment"]["experiment_name"] = f"run_{timestamp}"
+    CONFIG["log_status"]["log_dir"] = CONFIG["log_status"]["log_dir"] + f"/status_{timestamp}"
+    CONFIG["log_trajectories"]["log_dir"] = CONFIG["log_trajectories"]["log_dir"] + f"/trajectories_{timestamp}"
+
+    # ──────────────────────────────────────────────────────────────────────────
+    with open(BASE_DIR / args.config_name, "r") as f:
+        training_config = json.load(f)
+
+    deep_update(training_config, CONFIG)
+
+    CONFIG.clear()
+    CONFIG.update(training_config)
+    # ──────────────────────────────────────────────────────────────────────────
 
     if CONFIG["set_seed"]:
         set_seed(CONFIG["seed"])
+    else:
+        CONFIG["seed"] = torch.seed() % (2**32)
+        set_seed(CONFIG["seed"])
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # 🔹 Salvataggio config + informazioni di run   
+    eval_dir = BASE_DIR / "eval" / "configs"
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    eval_config_path = eval_dir / f"config_{timestamp}_{Path(args.run_name).name}.json"
+
+    config_to_save = CONFIG.copy()
+    config_to_save["model_path"] = str(
+        BASE_DIR / args.run_name / "checkpoints" / "best_agent.pt"
+    )
+    
+    with open(eval_config_path, "w") as f:
+        json.dump(config_to_save, f, indent=4, default=str)
+
+    print(f"[INFO] Config di valutazione salvata in: {eval_config_path}")
+    # ──────────────────────────────────────────────────────────────────────────
+
+    print(CONFIG)
     
     #################################################################################
 
     env = Satellite(
-        cfg=CONFIG,
+        config=CONFIG,
         rl_device=CONFIG["rl_device"],
         sim_device=CONFIG["sim_device"],
         graphics_device_id=CONFIG["graphics_device_id"],
         headless=CONFIG["headless"],
-        reward_fn=REWARD_MAP[args.reward_fn]()
+        is_eval=True
     )
     
     env = IsaacGymWrapper(env)
@@ -72,7 +118,10 @@ def main():
             action_space=env.action_space,
             device=env.device)
     
-    agent.load("/home/andreaberti/Satellite-Control-Baseline/runs/26-04-10_21-06-21-725698_PPO/checkpoints/best_agent.pt")
+    agent.load(BASE_DIR / args.run_name / "checkpoints" / "best_agent.pt")
+
+    print(BASE_DIR / args.run_name / "checkpoints" / "best_agent.pt")
+    
     trainer = SequentialTrainer(cfg=CONFIG["rl"]["trainer"], env=env, agents=agent)
 
     trainer.eval()

@@ -2,14 +2,16 @@
 
 DISPLAY_NUM=${1:-99}            # Numero del display, default 99
 CONDA_ENV=${2:-rlgpu}           # Nome dell'ambiente Conda, default "rlgpu"
-REWARD_FN=${3:-test}            # Reward function da passare, default "test"
+RUN_NAME=${3}                   # Path del checkpoint (.pt)
+CONFIG_NAME=${4}                # Path del file config (.json)
 SCREEN_RES="1920x1080x24"
 
 export DISPLAY=:$DISPLAY_NUM
 
 echo "Using DISPLAY=$DISPLAY"
 echo "Using Conda environment: $CONDA_ENV"
-echo "Using reward function: $REWARD_FN"
+echo "Using run file: $RUN_NAME"
+echo "Using config file: $CONFIG_NAME"
 
 # Verifica se il display è già in uso
 if [ -e /tmp/.X${DISPLAY_NUM}-lock ]; then
@@ -23,7 +25,7 @@ cleanup() {
     kill "$XVFB_PID" 2>/dev/null
     kill "$GNOME_PID" 2>/dev/null
     kill "$X11VNC_PID" 2>/dev/null
-    }
+}
 trap cleanup EXIT
 
 # Avvia Xvfb
@@ -63,8 +65,6 @@ else
     exit 1
 fi
 
-# Avvia il training con la reward function scelta
-
-python -m code.eval --reward-fn "$REWARD_FN"
+python -m code.eval --run-name "$RUN_NAME" --config-name "$CONFIG_NAME"
 
 exit 0

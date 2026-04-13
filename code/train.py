@@ -1,12 +1,11 @@
 # train.py
 
-from code.configs.satellite_config import CONFIG
+from code.configs.satellite_config_train import CONFIG
 from code.envs.satellite import Satellite
 from code.models.custom_model import Shared
 from code.envs.wrappers.isaacgym_envs_wrapper import IsaacGymWrapper
-from code.rewards.satellite_reward import ExponentialStabilizationReward
 
-import isaacgym
+import isaacgym #BugFix
 import torch
 
 from skrl.agents.torch.ppo import PPO, PPO_DEFAULT_CONFIG
@@ -14,7 +13,9 @@ from skrl.memories.torch import RandomMemory
 from skrl.trainers.torch import SequentialTrainer
 from skrl.utils import set_seed
 
-import argparse
+import json
+import datetime
+from pathlib import Path
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Profiler imports
@@ -27,22 +28,8 @@ import os
 import pandas as pd
 # ──────────────────────────────────────────────────────────────────────────────
 
-REWARD_MAP = {
-    "exp_stabilization": ExponentialStabilizationReward,
-}
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Training con reward function selezionabile")
-    parser.add_argument(
-        "--reward-fn",
-        choices=list(REWARD_MAP.keys()),
-        help="Which RewardFunction?"
-    )
-    return parser.parse_args()
-
 def setup_profiler(log_dir = "/home/andreaberti"):
-    dir_path = log_dir + "/profiler_logs/ISAAC_SKRL_Integration/satellite"
+    dir_path = log_dir + "/profiler_logs"
     if not os.path.exists(dir_path):
         os.makedirs(dir_path, exist_ok=True)
     #################################################################################
@@ -60,7 +47,7 @@ def setup_profiler(log_dir = "/home/andreaberti"):
 def save_profiler_results(prof, log_dir="/home/andreaberti"):
     events = prof.key_averages()
     #################################################################################
-    output_path = log_dir + "/profiler_text/ISAAC_SKRL_Integration/satellite/text_output.txt"
+    output_path = log_dir + "/profiler_text/text_output.txt"
     if not os.path.exists(os.path.dirname(output_path)):
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
     with open(output_path, "w") as f:
@@ -95,26 +82,46 @@ def save_profiler_results(prof, log_dir="/home/andreaberti"):
     #################################################################################
     print(df.head(40))
     #################################################################################
-    csv_path = log_dir + "/profiler_text/ISAAC_SKRL_Integration/satellite/csv_output.csv"
+    csv_path = log_dir + "/profiler_text/csv_output.csv"
     if not os.path.exists(os.path.dirname(csv_path)):
         os.makedirs(os.path.dirname(csv_path), exist_ok=True)
     df.to_csv(csv_path, index=False)
 
 def main():
-    args = parse_args()
-
     if CONFIG["set_seed"]:
+        set_seed(CONFIG["seed"])
+    else:
+        CONFIG["seed"] = torch.seed() % (2**32)
         set_seed(CONFIG["seed"])
     
     #################################################################################
+    
+    BASE_DIR = Path(__file__).resolve().parent.parent
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    CONFIG["rl"]["PPO"]["experiment"]["experiment_name"] = f"run_{timestamp}"
+    CONFIG["log_status"]["log_dir"] = CONFIG["log_status"]["log_dir"] + f"/status_{timestamp}"
+
+    # ──────────────────────────────────────────────────────────────────────────────
+    run_dir = BASE_DIR / "train" / "configs"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    config_path = run_dir / f"config_{timestamp}.json"
+
+    with open(config_path, "w") as f:
+        json.dump(CONFIG, f, indent=4, default=str)
+
+    print(f"[INFO] Config salvata in: {config_path}")
+    # ──────────────────────────────────────────────────────────────────────────────
+
+    print(CONFIG)
+    
     env = Satellite(
-        cfg=CONFIG,
+        config=CONFIG,
         rl_device=CONFIG["rl_device"],
         sim_device=CONFIG["sim_device"],
         graphics_device_id=CONFIG["graphics_device_id"],
         headless=CONFIG["headless"],
-        reward_fn=REWARD_MAP[args.reward_fn]()
+        is_eval=False
     )
     
     env = IsaacGymWrapper(env)
