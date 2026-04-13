@@ -84,7 +84,7 @@ CONFIG = {
         "log": True,
         "log_interval": 100,  # steps
         "log_flush": 1000,    # steps
-        "log_dir": "./eval/logs",
+        "log_dir": "./eval/trajectories",
     },
 
     # --- explosion ---------------------------------------------------------
