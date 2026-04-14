@@ -128,5 +128,5 @@
         "explosion_mean": 10.0,
         "explosion_std": 1.0
     },
-    "model_path": "/home/andreaberti/Satellite-Control-Baseline/train/runs/run_20260413_211537/checkpoints/best_agent.pt"
+    "model_path": "/home/andreaberti/Satellite-Control-Baseline/train/runs/randomization/run_20260413_211537/checkpoints/best_agent.pt"
 }
