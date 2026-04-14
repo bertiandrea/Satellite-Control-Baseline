@@ -52,7 +52,7 @@ class Satellite(DRVecTask):
         if self.is_eval:
             self.log_trajectories =                     config["log_trajectories"].get("log")
             if self.log_trajectories:
-                self.log_trajectories_dir =             config["log_trajectories"].get("log_dir")
+                self.log_trajectories_file =            config["log_trajectories"].get("log_file")
                 self.log_trajectories_interval =        config["log_trajectories"].get("log_interval")
                 self.log_trajectories_flush_interval =  config["log_trajectories"].get("log_flush")
             
@@ -95,7 +95,7 @@ class Satellite(DRVecTask):
 
         ###################################################    
         if self.is_eval and self.log_trajectories:
-                os.makedirs(os.path.dirname(self.log_trajectories_dir), exist_ok=True)
+                os.makedirs(os.path.dirname(self.log_trajectories_file), exist_ok=True)
                 self.log_buffer = []
         ###################################################
 
@@ -279,17 +279,17 @@ class Satellite(DRVecTask):
             })
 
         if self.control_steps % self.log_trajectories_flush_interval == 0 and self.log_buffer:
-            tmp_path = f"{self.log_trajectories_dir}.tmp"
-            if os.path.exists(self.log_trajectories_dir):
-                data = torch.load(self.log_trajectories_dir, weights_only=True)
+            tmp_path = f"{self.log_trajectories_file}.tmp"
+            if os.path.exists(self.log_trajectories_file):
+                data = torch.load(self.log_trajectories_file, weights_only=True)
                 data.extend(self.log_buffer)
             else:
                 data = list(self.log_buffer)
             torch.save(data, tmp_path)
-            os.replace(tmp_path, self.log_trajectories_dir)
+            os.replace(tmp_path, self.log_trajectories_file)
             self.log_buffer.clear()
             if self.debug_prints:
-                print(f"[LOG] Flushed to {self.log_trajectories_dir} at step {self.control_steps}")
+                print(f"[LOG] Flushed to {self.log_trajectories_file} at step {self.control_steps}")
         
     ################################################################################################################################
 

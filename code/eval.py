@@ -45,7 +45,7 @@ def main():
 
     CONFIG["rl"]["PPO"]["experiment"]["experiment_name"] = f"run_{timestamp}"
     CONFIG["log_status"]["log_dir"] = CONFIG["log_status"]["log_dir"] + f"/status_{timestamp}"
-    CONFIG["log_trajectories"]["log_dir"] = CONFIG["log_trajectories"]["log_dir"] + f"/trajectories_{timestamp}"
+    CONFIG["log_trajectories"]["log_file"] = CONFIG["log_trajectories"]["log_dir"] + f"/trajectories_{timestamp}.pt"
 
     # ──────────────────────────────────────────────────────────────────────────
     with open(BASE_DIR / args.config_name, "r") as f:
