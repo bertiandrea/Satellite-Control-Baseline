@@ -7,7 +7,7 @@ from collections import Counter
 from pathlib import Path
 
 # --- CONFIGURAZIONE ---
-EXPECTED_SEEDS = [420, 4200, 42000, 420000, 4200000]
+EXPECTED_SEEDS = [420, 4200, 42000, 420000, 4200000, 420, 4200, 42000, 420000, 4200000]
 EXPECTED_COUNTS = Counter(EXPECTED_SEEDS)
 EXPECTED_N = len(EXPECTED_SEEDS)
 
@@ -17,8 +17,7 @@ TRAJECTORIES_RE = re.compile(r"^trajectories_(?P<y>\d{8})_(?P<tm>\d{6})\.pt$")
 STATUS_RE = re.compile(r"^status_(?P<y>\d{8})_(?P<tm>\d{6})$")
 
 def dst_in_current_branch(src: Path, run_group_dir: str) -> Path:
-    if src.parent.name == run_group_dir:
-        return src
+    if src.parent.name == run_group_dir: return src
     return src.parent / run_group_dir / src.name
 
 def get_eval_ts_cfg(name: str) -> str:
@@ -86,6 +85,8 @@ def main():
 
     ap.add_argument("--no-trajectories", action="store_true",
                     help="exclude trajectories files from checks and moves")
+    ap.add_argument("--no-runs", action="store_true",
+                    help="exclude runs directories from checks and moves")
     ap.add_argument("--no-seed", action="store_true",
                     help="exclude seed checks")
 
@@ -94,24 +95,27 @@ def main():
     root = Path(args.root).expanduser().resolve()
 
     cfg_root = (root / args.config_dir).resolve()
-    runs_root = (root / args.runs_dir).resolve()
     status_root = (root / args.status_dir).resolve()
+    if not args.no_runs:
+        runs_root = (root / args.runs_dir).resolve()
     if not args.no_trajectories:
         trajectories_root = (root / args.trajectories_dir).resolve()
 
     if not cfg_root.is_dir():
         raise SystemExit(f"config dir not found: {cfg_root}")
-    if not runs_root.is_dir():
-        raise SystemExit(f"runs dir not found: {runs_root}")
     if not status_root.is_dir():
         raise SystemExit(f"status dir not found: {status_root}")
+    if not args.no_runs:
+        if not runs_root.is_dir():
+            raise SystemExit(f"runs dir not found: {runs_root}")
     if not args.no_trajectories:
         if not trajectories_root.is_dir():
             raise SystemExit(f"trajectories dir not found: {trajectories_root}")
 
     configs = [p for p in cfg_root.rglob("*.json") if p.is_file() and CFG_RE.search(p.name)]
-    run_dirs = [d for d in runs_root.rglob("*") if d.is_dir() and RUN_RE.search(d.name)]
     status_dirs = [d for d in status_root.rglob("*") if d.is_dir() and STATUS_RE.search(d.name)]
+    if not args.no_runs:
+        run_dirs = [d for d in runs_root.rglob("*") if d.is_dir() and RUN_RE.search(d.name)]
     if not args.no_trajectories:
         trajectories = [p for p in trajectories_root.rglob("*.pt") if p.is_file() and TRAJECTORIES_RE.search(p.name)]
 
@@ -120,8 +124,9 @@ def main():
     planned_moves = []
 
     cfg_by_eval_ts = {get_eval_ts_cfg(p.name): p for p in configs}
-    runs_by_ts = {get_ts(d.name, RUN_RE): d for d in run_dirs}
     status_by_ts = {get_ts(d.name, STATUS_RE): d for d in status_dirs}
+    if not args.no_runs:
+        runs_by_ts = {get_ts(d.name, RUN_RE): d for d in run_dirs}
     if not args.no_trajectories:
         trajectories_by_ts = {get_ts(p.name, TRAJECTORIES_RE): p for p in trajectories}
 
@@ -142,14 +147,15 @@ def main():
                 continue
             seeds_by_key.setdefault(train_ts, []).append(seed)
 
-        run_dir = runs_by_ts.get(eval_ts)
-        if run_dir is None:
-            errors.append(f"Run {train_ts}: Nessuna cartella RUN trovata per {config.name} (atteso run_{eval_ts})")
-            continue
         status_dir = status_by_ts.get(eval_ts)
         if status_dir is None:
             errors.append(f"Run {train_ts}: Nessuna cartella STATUS trovata per {config.name} (atteso status_{eval_ts})")
             continue
+        if not args.no_runs:
+            run_dir = runs_by_ts.get(eval_ts)
+            if run_dir is None:
+                errors.append(f"Run {train_ts}: Nessuna cartella RUN trovata per {config.name} (atteso run_{eval_ts})")
+                continue
         if not args.no_trajectories:
             trajectories_file = trajectories_by_ts.get(eval_ts)
             if trajectories_file is None:
@@ -160,8 +166,9 @@ def main():
             run_group_dir = f"run_{train_ts}"
 
             planned_moves.append((config, dst_in_current_branch(config, run_group_dir)))
-            planned_moves.append((run_dir, dst_in_current_branch(run_dir, run_group_dir)))
             planned_moves.append((status_dir, dst_in_current_branch(status_dir, run_group_dir)))
+            if not args.no_runs:
+                planned_moves.append((run_dir, dst_in_current_branch(run_dir, run_group_dir)))
             if not args.no_trajectories:
                 planned_moves.append((trajectories_file, dst_in_current_branch(trajectories_file, run_group_dir)))
 
