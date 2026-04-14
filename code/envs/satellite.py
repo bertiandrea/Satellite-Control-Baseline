@@ -141,7 +141,6 @@ class Satellite(DRVecTask):
             asset_init_pos_p = [0, 0, 0]
 
             if self.is_eval and self.discretize_starting_pos:
-                print("[EVAL] Discretized starting position enabled. Using precomputed orientations.")
                 #self.asset_init_pos_r_all = self.get_discretized_orientations(base_quat)
                 asset_init_pos_r = self.asset_init_pos_r_all[i]
             else:

@@ -127,7 +127,7 @@ def main():
         base_runs = sorted(unique_groups, key=nat_key)
 
     sub_h = " |  NOMINAL  | RANDOM-NOISE |   DIFF%   "
-    name_w = 80
+    name_w = 40
     h_top = " " * name_w
     h_mid = f"{'RUN ID':<{name_w}}"
     
