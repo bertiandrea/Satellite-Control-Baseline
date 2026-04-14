@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from collections import defaultdict
 from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+from tensorboard.backend.event_processing.event_file_loader import EventFileLoader
 
 def nat_key(s):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r'(\d+)', str(s))]
@@ -13,8 +14,8 @@ TAGS = ["Angular Error/q_diff_mean_deg", "Energy/mean",
         "Energy/delta_mean", "Goal/goal", "Torque/max_mean"]
 
 LOG_DISPLAY = {
-    "Angular Error/q_diff_mean_deg": 1e-1,
-    "Energy/mean": 1e0,
+    "Angular Error/q_diff_mean_deg": 1e0,
+    "Energy/mean": 1e1,
     "Energy/delta_mean": 1e0,
     "Torque/max_mean": 1e-1,
 }
