@@ -18,6 +18,9 @@ from gym import spaces
 
 from torch.profiler import record_function
 
+from code.utils.satellite_util import quat_mul, quat_conjugate
+import math
+
 EXISTING_SIM = None
 
 def _create_sim_once(gym, *args, **kwargs):
@@ -159,6 +162,18 @@ class VecTask(Env):
 
     def step(self, actions: torch.Tensor) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor, Dict[str, Any]]:
         with record_function("#VecTask__STEP"):
+
+            ##########################################################################################
+            if self.randomize:
+                if self.debug_prints:
+                    print("Action BEFORE randomization:")
+                    print(f"actions[0]: {', '.join(f'{v:.2f}' for v in actions[0].tolist())}")
+                actions = self.dr_randomizations['actions']['noise_lambda'](actions)
+                if self.debug_prints:
+                    print("Action AFTER randomization:")
+                    print(f"actions[0]: {', '.join(f'{v:.2f}' for v in actions[0].tolist())}")
+            ##########################################################################################
+
             actions = torch.clamp(actions, -self.clip_actions, self.clip_actions)
             
             if self.debug_prints:
@@ -178,6 +193,21 @@ class VecTask(Env):
 
             with record_function("$VecTask__step__post_physics_step"):
                 self.post_physics_step()
+
+            ##########################################################################################
+            if self.randomize:
+                if self.debug_prints:
+                    print("Observations and States BEFORE randomization:")
+                    print(f"obs_buf[0]: {', '.join(f'{v:.2f}' for v in self.obs_buf[0].tolist())}")
+                    print(f"state_buf[0]: {', '.join(f'{v:.2f}' for v in self.states_buf[0].tolist())}")
+
+                self.states_buf = self.apply_noise_on_custom_buffer(self.states_buf, 'states')
+
+                if self.debug_prints:
+                    print("Observations and States AFTER randomization:")
+                    print(f"obs_buf[0]: {', '.join(f'{v:.2f}' for v in self.obs_buf[0].tolist())}")
+                    print(f"state_buf[0]: {', '.join(f'{v:.2f}' for v in self.states_buf[0].tolist())}")
+            ##########################################################################################
 
             self.obs_states_dict["obs"] = torch.clamp(self.obs_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
             self.obs_states_dict["states"] = torch.clamp(self.states_buf, -self.clip_obs, self.clip_obs).to(self.rl_device)
@@ -301,8 +331,89 @@ class DRVecTask(VecTask):
         if self.randomize: 
             self.first_randomization = True
             self.original_props = {}
+            ##################################################
+            self.dr_randomizations = {}
 
         super().__init__(config, rl_device, sim_device, graphics_device_id, headless)
+
+    #############################################################################################
+    
+    def apply_noise_on_custom_buffer(self, buf, buf_type):
+        # Keep original orientation quaternion
+        q_clean = buf[:, 0:4].clone()
+
+        # Add noise to orientation quaternion and renormalize
+        buf[:, 0:4] = self.dr_randomizations[buf_type]['noise_lambda_quat'](buf[:, 0:4])
+        buf[:, 0:4] = buf[:, 0:4] / buf[:, 0:4].norm(dim=-1, keepdim=True)
+
+        # Compute the injected rotation noise
+        q_noise = quat_mul(buf[:, 0:4], quat_conjugate(q_clean))
+
+        # Apply same noise to quaternion error-to-goal and renormalize
+        buf[:, 4:8] = quat_mul(q_noise, buf[:, 4:8])
+        buf[:, 4:8] = buf[:, 4:8] / buf[:, 4:8].norm(dim=-1, keepdim=True)
+
+        # Store magnitude of injected rotation noise
+        buf[:, 8] = 2.0 * torch.asin(q_noise[:, 0:3].norm(dim=-1).clamp(max=1.0))
+
+        # Add noise to remaining buffer values
+        buf[:, 9:] = self.dr_randomizations[buf_type]['noise_lambda'](buf[:, 9:])
+
+        return buf
+
+    def _init_randomization_functions(self, dr_params):
+        for param in ["observations", "states", "actions"]:
+            dist = dr_params[param]["distribution"]
+            operation = dr_params[param]["operation"]
+
+            if dist == 'gaussian':
+                mu, std = dr_params[param]["range"]
+                q_noise_gaussian = dr_params[param].get("quaternion_noise", 0.0)
+
+                if operation == "scaling":
+                    def noise_lambda(tensor, mu=mu, std=std):
+                        return tensor * (torch.randn_like(tensor) * std + mu)
+                elif operation == "addition":
+                    def noise_lambda(tensor, mu=mu, std=std):
+                        return tensor + (torch.randn_like(tensor) * std + mu)
+                else:
+                    raise ValueError("Unsupported operation type")
+                
+                def noise_lambda_quat(q, q_noise_gaussian=q_noise_gaussian):
+                    axis = torch.randn((q.shape[0], 3), device=q.device, dtype=q.dtype)
+                    axis = axis / axis.norm(dim=-1, keepdim=True)
+                    angle = torch.randn((q.shape[0], 1), device=q.device, dtype=q.dtype) * (q_noise_gaussian * math.pi)
+                    dq = torch.cat([axis * torch.sin(0.5 * angle), torch.cos(0.5 * angle)], dim=-1)
+                    return quat_mul(dq, q)
+            
+            elif dist == 'uniform':
+                lo, hi = dr_params[param]["range"]
+                q_noise_uniform = dr_params[param].get("quaternion_noise", 0.0)
+
+                if operation == "scaling":
+                    def noise_lambda(tensor, lo=lo, hi=hi):
+                        return tensor * (torch.rand_like(tensor) * (hi - lo) + lo)
+                elif operation == "addition":
+                    def noise_lambda(tensor, lo=lo, hi=hi):
+                        return tensor + (torch.rand_like(tensor) * (hi - lo) + lo)
+                else:
+                    raise ValueError("Unsupported operation type")
+                
+                def noise_lambda_quat(q, q_noise_uniform=q_noise_uniform):
+                    axis = torch.randn((q.shape[0], 3), device=q.device, dtype=q.dtype)
+                    axis = axis / axis.norm(dim=-1, keepdim=True)
+                    angle = torch.rand((q.shape[0], 1), device=q.device, dtype=q.dtype) * (q_noise_uniform * math.pi)
+                    dq = torch.cat([axis * torch.sin(0.5 * angle), torch.cos(0.5 * angle)], dim=-1)
+                    return quat_mul(dq, q)
+                
+            else:
+                raise ValueError("Unsupported distribution type")
+            self.dr_randomizations[param] = {
+                "noise_lambda": noise_lambda,
+                "noise_lambda_quat": noise_lambda_quat
+            }
+
+    #############################################################################################
 
     def _sample_random_val(self, params):
         if params["distribution"] == "gaussian":
@@ -357,6 +468,9 @@ class DRVecTask(VecTask):
                     )
                     
     def apply_randomizations(self, env_ids, dr_params):
+        if self.first_randomization:
+            self._init_randomization_functions(dr_params)
+
         self._randomize_actor_properties(env_ids, dr_params)
 
         self.first_randomization = False

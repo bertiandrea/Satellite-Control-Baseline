@@ -150,6 +150,23 @@ CONFIG = {
                     },
                 },
             },
+            "observations": {
+                "distribution": "gaussian", # "uniform" or "gaussian"
+                "operation": "scaling", # "scaling" or "addition"
+                "range": [1.0, 0.01], # gaussian: [mu, std], uniform: [low, high]
+                "quaternion_noise": 0.001, # gaussian [std], uniform [distance]
+            },
+            "states": {
+                "distribution": "gaussian", # "uniform" or "gaussian"
+                "operation": "scaling", # "scaling" or "addition"
+                "range": [1.0, 0.01], # gaussian: [mu, std], uniform: [low, high]
+                "quaternion_noise": 0.001, # gaussian [std], uniform [distance]
+            },
+            "actions": {
+                "distribution": "gaussian", # "uniform" or "gaussian"
+                "operation": "scaling", # "scaling" or "addition"
+                "range": [1.0, 0.01], # gaussian: [mu, std], uniform: [low, high]
+            },
         },
     },
 }
