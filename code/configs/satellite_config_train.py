@@ -145,7 +145,7 @@ CONFIG = {
                         "inertia": {
                             "distribution": "gaussian", # "uniform" or "gaussian"
                             "operation": "scaling", # "scaling" or "addition"
-                            "range": [1.0, 0.05], # gaussian: [mu, var], uniform: [low, high]
+                            "range": [1.0, 0.05], # gaussian: [mu, std], uniform: [low, high]
                         },
                     },
                 },
